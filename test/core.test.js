@@ -240,3 +240,24 @@ test('settings registry exposes tabs and read/write via storage namespace', asyn
   await field.write({}, 'cards');
   assert.equal(await field.read({}), 'cards');
 });
+
+test('journal templates container initializes default template and supports add/delete', async () => {
+  const sdo = createSEDO({ storage: createMemoryStorage() });
+  await sdo.start();
+
+  const initial = await sdo.journalTemplates.listTemplates();
+  assert.ok(initial.some((x) => x.id === 'test'));
+
+  await sdo.journalTemplates.addTemplate({
+    id: 'custom',
+    title: 'Custom',
+    columns: [{ key: 'c1', label: 'A' }]
+  });
+
+  const added = await sdo.journalTemplates.getTemplate('custom');
+  assert.equal(added.title, 'Custom');
+
+  await sdo.journalTemplates.deleteTemplate('custom');
+  const removed = await sdo.journalTemplates.getTemplate('custom');
+  assert.equal(removed, null);
+});

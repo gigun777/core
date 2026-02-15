@@ -7,6 +7,7 @@ import { createUIRegistry } from './core/ui_registry_core.js';
 import { createSchemaRegistry } from './core/schema_registry_core.js';
 import { createCommandsRegistry } from './core/commands_registry_core.js';
 import { createSettingsRegistry } from './core/settings_registry_core.js';
+import { createJournalTemplatesContainer } from './stores/journal_templates_container.js';
 import { createIntegrity, decryptBackup, encryptBackup, verifyIntegrity } from './backup/crypto.js';
 
 function deepFreeze(obj) {
@@ -45,6 +46,7 @@ export function createSEDO(options = {}) {
   const uiRegistry = createUIRegistry();
   const schemaRegistry = createSchemaRegistry();
   const settingsRegistry = createSettingsRegistry();
+  const journalTemplates = createJournalTemplatesContainer(storage);
 
   const state = {
     spaces: [],
@@ -170,6 +172,15 @@ export function createSEDO(options = {}) {
       getKey: (key) => storage.get(key),
       setKey: (key, value) => storage.set(key, value)
     },
+    journalTemplates: {
+      listTemplates: () => journalTemplates.listTemplates(),
+      listTemplateEntities: () => journalTemplates.listTemplateEntities(),
+      getTemplate: (id) => journalTemplates.getTemplate(id),
+      addTemplate: (template) => journalTemplates.addTemplate(template),
+      deleteTemplate: (id) => journalTemplates.deleteTemplate(id),
+      exportDelta: (sinceRevision = 0) => journalTemplates.exportDelta(sinceRevision),
+      applyDelta: (patch) => journalTemplates.applyDelta(patch)
+    },
     use(module) {
       if (!module?.id || typeof module?.init !== 'function') throw new Error('Invalid module');
       if (modules.has(module.id)) return instance;
@@ -186,6 +197,20 @@ export function createSEDO(options = {}) {
       return plugin;
     },
     async start() {
+      await journalTemplates.ensureInitialized();
+      backupProviders.set('journal-templates', {
+        id: 'journal-templates',
+        version: '0.1.0',
+        describe: () => ({ settings: ['templates:*'], userData: [] }),
+        export: async () => ({ templates: await journalTemplates.listTemplateEntities() }),
+        import: async (payload) => {
+          for (const template of payload.templates ?? []) {
+            await journalTemplates.deleteTemplate(template.id);
+            await journalTemplates.addTemplate(template);
+          }
+          return { applied: true, warnings: [] };
+        }
+      });
       const nav = await loadNavigationState(storage);
       state.spaces = nav.spaces;
       state.journals = nav.journals;

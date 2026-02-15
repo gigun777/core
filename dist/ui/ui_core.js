@@ -16,7 +16,7 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   const modalLayer = h('div', { class: 'sdo-modal-layer' });
   modalLayer.hidden = true;
 
-  const addButton = h('button', {
+  const addModuleButton = h('button', {
     class: 'sdo-add-module',
     onClick: async () => {
       const url = window.prompt('Module ESM URL:');
@@ -30,14 +30,19 @@ export function createModuleManagerUI({ sdo, mount, api }) {
     }
   }, ['+ Додати модуль']);
 
+  const templatesButton = h('button', {
+    class: 'sdo-add-module',
+    onClick: () => openTemplatesManager()
+  }, ['Шаблони']);
+
+  function closeModal() {
+    modalLayer.hidden = true;
+    modalLayer.innerHTML = '';
+  }
+
   function openPicker({ title, items, onSelect, onAddCurrentLevel, getLabel }) {
     modalLayer.innerHTML = '';
     modalLayer.hidden = false;
-
-    const close = () => {
-      modalLayer.hidden = true;
-      modalLayer.innerHTML = '';
-    };
 
     const list = h('div', { class: 'sdo-picker-list' });
     for (const item of items) {
@@ -45,28 +50,120 @@ export function createModuleManagerUI({ sdo, mount, api }) {
         class: 'sdo-picker-row',
         onClick: async () => {
           await onSelect(item);
-          close();
+          closeModal();
         }
       }, [getLabel(item)]);
       list.append(row);
     }
 
-    const addButton = h('button', {
-      class: 'sdo-picker-add',
-      onClick: async () => {
-        await onAddCurrentLevel();
-        close();
-      }
-    }, ['+ Додати на цей рівень']);
-
-    const modal = h('div', { class: 'sdo-picker-modal' }, [
+    const modalChildren = [
       h('div', { class: 'sdo-picker-title' }, [title]),
-      list,
-      addButton,
-      h('button', { class: 'sdo-picker-close', onClick: close }, ['Закрити'])
-    ]);
+      list
+    ];
 
+    if (typeof onAddCurrentLevel === 'function') {
+      modalChildren.push(h('button', {
+        class: 'sdo-picker-add',
+        onClick: async () => {
+          await onAddCurrentLevel();
+          closeModal();
+        }
+      }, ['+ Додати на цей рівень']));
+    }
+
+    modalChildren.push(h('button', { class: 'sdo-picker-close', onClick: closeModal }, ['Закрити']));
+    modalLayer.append(h('div', { class: 'sdo-picker-modal' }, modalChildren));
+  }
+
+  async function openTemplatesManager() {
+    modalLayer.innerHTML = '';
+    modalLayer.hidden = false;
+
+    let selectedId = null;
+    let deleteArmed = false;
+
+    const title = h('div', { class: 'sdo-picker-title' }, ['Шаблони журналів']);
+    const listHost = h('div', { class: 'sdo-picker-list' });
+    const detailsHost = h('div', { class: 'sdo-template-details' }, ['Оберіть шаблон']);
+    const actions = h('div', { class: 'sdo-template-actions' });
+
+    async function refresh() {
+      const templates = await sdo.journalTemplates.listTemplateEntities();
+      if (!selectedId && templates[0]) selectedId = templates[0].id;
+      if (selectedId && !templates.some((t) => t.id === selectedId)) selectedId = templates[0]?.id ?? null;
+
+      listHost.innerHTML = '';
+      for (const tpl of templates) {
+        listHost.append(h('button', {
+          class: `sdo-picker-row ${tpl.id === selectedId ? 'is-selected' : ''}`,
+          onClick: () => {
+            selectedId = tpl.id;
+            deleteArmed = false;
+            refresh();
+          }
+        }, [`${tpl.title} (${tpl.columns.length})`]));
+      }
+
+      const selected = templates.find((x) => x.id === selectedId) ?? null;
+      if (!selected) {
+        detailsHost.innerHTML = 'Немає шаблонів';
+      } else {
+        detailsHost.innerHTML = '';
+        detailsHost.append(h('div', { class: 'sdo-template-title' }, [`ID: ${selected.id}`]));
+        for (const col of selected.columns) {
+          detailsHost.append(h('div', { class: 'sdo-template-col' }, [`• ${col.label} (${col.key})`]));
+        }
+      }
+
+      actions.innerHTML = '';
+      actions.append(
+        h('button', {
+          class: 'sdo-picker-add',
+          onClick: async () => {
+            const id = window.prompt('ID шаблону (без пробілів):', 'new-template');
+            if (!id) return;
+            const titleValue = window.prompt('Назва шаблону:', id) ?? id;
+            const colsRaw = window.prompt('Назви колонок через кому:', '1,2,3');
+            if (!colsRaw) return;
+            const labels = colsRaw.split(',').map((x) => x.trim()).filter(Boolean);
+            await sdo.journalTemplates.addTemplate({
+              id,
+              title: titleValue,
+              columns: labels.map((label, idx) => ({ key: `c${idx + 1}`, label }))
+            });
+            selectedId = id;
+            deleteArmed = false;
+            await refresh();
+          }
+        }, ['Додати шаблон']),
+        h('button', {
+          class: 'sdo-picker-close',
+          onClick: async () => {
+            if (!selectedId) return;
+            if (!deleteArmed) {
+              deleteArmed = true;
+              await refresh();
+              return;
+            }
+            await sdo.journalTemplates.deleteTemplate(selectedId);
+            selectedId = null;
+            deleteArmed = false;
+            await refresh();
+          }
+        }, [deleteArmed ? 'Так, видалити' : 'Видалити шаблон']),
+        h('button', {
+          class: 'sdo-picker-close',
+          onClick: () => {
+            deleteArmed = false;
+            closeModal();
+          }
+        }, [deleteArmed ? 'Ні' : 'Закрити'])
+      );
+    }
+
+    const modal = h('div', { class: 'sdo-picker-modal' }, [title, listHost, detailsHost, actions]);
     modalLayer.append(modal);
+    await refresh();
   }
 
   function evaluateGuard(fn, fallback = true) {
@@ -88,6 +185,35 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   function getJournalLabel(journal) {
     const idx = journal.index ? `${journal.index} ` : '';
     return `${idx}${journal.title}`;
+  }
+
+  async function createJournalWithTemplate({ state, parentId, titlePrompt }) {
+    const templates = await sdo.journalTemplates.listTemplateEntities();
+    if (templates.length === 0) {
+      status.textContent = 'Немає доступних шаблонів';
+      return;
+    }
+    openPicker({
+      title: 'Оберіть шаблон журналу',
+      items: templates,
+      getLabel: (tpl) => tpl.title,
+      onSelect: async (template) => {
+        const title = window.prompt('Назва журналу:', titlePrompt);
+        if (!title) return;
+        await sdo.commit((next) => {
+          const node = {
+            id: crypto.randomUUID(),
+            spaceId: state.activeSpaceId,
+            parentId,
+            templateId: template.id,
+            title,
+            childCount: 0
+          };
+          next.journals = [...next.journals, node];
+          next.activeJournalId = node.id;
+        }, ['journals_nodes_v2', 'nav_last_loc_v2']);
+      }
+    });
   }
 
   async function renderNavigation() {
@@ -198,14 +324,8 @@ export function createModuleManagerUI({ sdo, mount, api }) {
         },
         onAddCurrentLevel: async () => {
           if (!state.activeSpaceId) return;
-          const title = window.prompt('Назва журналу:', 'Вхідні поточні');
-          if (!title) return;
-          await sdo.commit((next) => {
-            const parentId = activeJournal ? activeJournal.parentId : state.activeSpaceId;
-            const node = { id: crypto.randomUUID(), spaceId: state.activeSpaceId, parentId, templateId: 'table-template-v1', title, childCount: 0 };
-            next.journals = [...next.journals, node];
-            next.activeJournalId = node.id;
-          }, ['journals_nodes_v2', 'nav_last_loc_v2']);
+          const parentId = activeJournal ? activeJournal.parentId : state.activeSpaceId;
+          await createJournalWithTemplate({ state, parentId, titlePrompt: 'Вхідні поточні' });
         }
       })
     }, [activeJournal ? getJournalLabel(activeJournal) : 'Додай журнал']);
@@ -224,13 +344,7 @@ export function createModuleManagerUI({ sdo, mount, api }) {
         },
         onAddCurrentLevel: async () => {
           if (!activeJournal) return;
-          const title = window.prompt('Назва піджурналу:', 'Піджурнал');
-          if (!title) return;
-          await sdo.commit((next) => {
-            const node = { id: crypto.randomUUID(), spaceId: state.activeSpaceId, parentId: activeJournal.id, templateId: 'table-template-v1', title, childCount: 0 };
-            next.journals = [...next.journals, node];
-            next.activeJournalId = node.id;
-          }, ['journals_nodes_v2', 'nav_last_loc_v2']);
+          await createJournalWithTemplate({ state, parentId: activeJournal.id, titlePrompt: 'Піджурнал' });
         }
       })
     }, [journalChildren[0] ? getJournalLabel(journalChildren[0]) : '—']);
@@ -239,14 +353,8 @@ export function createModuleManagerUI({ sdo, mount, api }) {
       class: 'sdo-nav-btn sdo-nav-plus',
       onClick: async () => {
         if (!state.activeSpaceId) return;
-        const title = window.prompt('Назва піджурналу:', activeJournal ? 'Піджурнал' : 'Вхідні поточні');
-        if (!title) return;
-        await sdo.commit((next) => {
-          const parentId = activeJournal ? activeJournal.id : state.activeSpaceId;
-          const node = { id: crypto.randomUUID(), spaceId: state.activeSpaceId, parentId, templateId: 'table-template-v1', title, childCount: 0 };
-          next.journals = [...next.journals, node];
-          next.activeJournalId = node.id;
-        }, ['journals_nodes_v2', 'nav_last_loc_v2']);
+        const parentId = activeJournal ? activeJournal.id : state.activeSpaceId;
+        await createJournalWithTemplate({ state, parentId, titlePrompt: activeJournal ? 'Піджурнал' : 'Вхідні поточні' });
       }
     }, ['+']);
 
@@ -260,29 +368,29 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   function renderButtons() {
     const uiButtons = sdo.ui.listButtons({ location: 'toolbar' });
     const commandButtons = sdo.commands.list((c) => c.menu?.location === 'toolbar');
-    const items = [addButton];
+
+    const left = h('div', { class: 'sdo-toolbar-left' });
+    const right = h('div', { class: 'sdo-toolbar-right' }, [templatesButton, addModuleButton]);
 
     for (const def of uiButtons) {
       if (!evaluateGuard(def.visible, true)) continue;
-      const btn = h('button', {
+      left.append(h('button', {
         class: 'sdo-module-button',
         disabled: evaluateGuard(def.enabled, true) ? null : 'disabled',
         onClick: () => def.onClick({ api, sdo })
-      }, [def.label]);
-      items.push(btn);
+      }, [def.label]));
     }
 
     for (const cmd of commandButtons) {
       if (!evaluateGuard(cmd.when, true)) continue;
-      const btn = h('button', {
+      left.append(h('button', {
         class: 'sdo-module-button',
         onClick: async () => sdo.commands.run(cmd.id)
-      }, [cmd.title]);
-      items.push(btn);
+      }, [cmd.title]));
     }
 
     toolbar.innerHTML = '';
-    toolbar.append(...items);
+    toolbar.append(left, right);
   }
 
   let panelCleanup = null;

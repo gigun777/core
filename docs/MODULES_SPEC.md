@@ -70,3 +70,17 @@ Use only prefixed keys:
 
 ## Reference module
 See [`docs/reference-module.mjs`](./reference-module.mjs) (`@sdo/module-example-table`), which demonstrates schema/commands/settings/UI/backup/delta.
+
+
+## Journal templates container
+Core includes `@sdo/journal-templates`-style container API on `sdo.journalTemplates`:
+- `listTemplates()`
+- `getTemplate(id)`
+- `addTemplate(template)`
+- `deleteTemplate(id)`
+
+Template model:
+```json
+{ "id": "test", "title": "test", "columns": [{"key":"c1","label":"1"}] }
+```
+Storage keys: `templates:index`, `templates:tpl:${id}`.

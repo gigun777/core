@@ -49,3 +49,11 @@ SEDO instance:
 
 See full spec: [`docs/MODULES_SPEC.md`](./docs/MODULES_SPEC.md)
 Reference module: [`docs/reference-module.mjs`](./docs/reference-module.mjs)
+
+
+## Journal templates container (@sdo/journal-templates, v0.1.0)
+- API: `sdo.journalTemplates.listTemplates/getTemplate/addTemplate/deleteTemplate`
+- storage keys: `templates:index`, `templates:tpl:${id}`
+- first run default template: `test` with 5 columns
+- UI: top-right **Шаблони** button opens templates manager modal
+- journal creation now picks template list from container (not hardcoded)
