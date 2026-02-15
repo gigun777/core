@@ -142,3 +142,101 @@ test('ui registry enforces unique ids', () => {
     });
   }, /already registered/);
 });
+
+test('schema registry works with get/list/resolve and version guard', () => {
+  const sdo = createSEDO({ storage: createMemoryStorage() });
+  sdo.use({
+    id: 'schema-mod',
+    version: '1.0.0',
+    init(ctx) {
+      ctx.registerSchema({
+        id: 'schema.a',
+        version: '1.0.0',
+        domain: 'table',
+        appliesTo: { templateId: 'tpl-1' },
+        fields: [{ key: 'name', label: 'Name', type: 'text' }]
+      });
+    }
+  });
+
+  assert.equal(sdo.schemas.get('schema.a').domain, 'table');
+  assert.equal(sdo.schemas.resolve('tpl-1').id, 'schema.a');
+  assert.equal(sdo.schemas.list().length, 1);
+
+  assert.throws(() => {
+    sdo.use({
+      id: 'schema-mod-2',
+      version: '1.0.0',
+      init(ctx) {
+        ctx.registerSchema({
+          id: 'schema.a',
+          version: '1.0.0',
+          domain: 'table',
+          appliesTo: { any: true },
+          fields: []
+        });
+      }
+    });
+  }, /same or newer version/);
+});
+
+test('commands registry run/list supports when guard', async () => {
+  const sdo = createSEDO({ storage: createMemoryStorage() });
+  let ran = false;
+
+  sdo.use({
+    id: 'cmd-mod',
+    version: '1.0.0',
+    init(ctx) {
+      ctx.registerCommands([
+        {
+          id: 'cmd.ok',
+          title: 'OK',
+          menu: { location: 'toolbar' },
+          run: async () => { ran = true; }
+        },
+        {
+          id: 'cmd.blocked',
+          title: 'Blocked',
+          when: () => false,
+          run: async () => {}
+        }
+      ]);
+    }
+  });
+
+  assert.equal(sdo.commands.list().length, 2);
+  await sdo.commands.run('cmd.ok');
+  assert.equal(ran, true);
+  await assert.rejects(() => sdo.commands.run('cmd.blocked'), /disabled by when/);
+});
+
+test('settings registry exposes tabs and read/write via storage namespace', async () => {
+  const sdo = createSEDO({ storage: createMemoryStorage() });
+
+  sdo.use({
+    id: 'settings-mod',
+    version: '1.0.0',
+    init(ctx) {
+      ctx.registerSettings({
+        id: 'settings-mod.settings',
+        tab: { id: 'settings-mod', title: 'Settings Mod', order: 1 },
+        fields: [
+          {
+            key: 'settings-mod:viewMode',
+            label: 'View mode',
+            type: 'text',
+            read: async () => (await ctx.storage.get('settings-mod:viewMode')) ?? 'table',
+            write: async (_runtime, value) => ctx.storage.set('settings-mod:viewMode', value)
+          }
+        ]
+      });
+    }
+  });
+
+  const tabs = sdo.settings.listTabs();
+  assert.equal(tabs[0].id, 'settings-mod');
+  const field = tabs[0].items[0].fields[0];
+  await field.write({}, 'cards');
+  assert.equal(await field.read({}), 'cards');
+});

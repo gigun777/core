@@ -6,6 +6,7 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   const status = h('div', { class: 'sdo-status' }, ['Ready']);
   const toolbar = h('div', { class: 'sdo-toolbar' });
   const panelsHost = h('div', { class: 'sdo-panels' });
+  const settingsHost = h('div', { class: 'sdo-settings' });
 
   const addButton = h('button', {
     class: 'sdo-add-module',
@@ -27,9 +28,11 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   }
 
   function renderButtons() {
-    const buttons = sdo.ui.listButtons({ location: 'toolbar' });
+    const uiButtons = sdo.ui.listButtons({ location: 'toolbar' });
+    const commandButtons = sdo.commands.list((c) => c.menu?.location === 'toolbar');
     const items = [addButton];
-    for (const def of buttons) {
+
+    for (const def of uiButtons) {
       if (!evaluateGuard(def.visible, true)) continue;
       const btn = h('button', {
         class: 'sdo-module-button',
@@ -38,6 +41,16 @@ export function createModuleManagerUI({ sdo, mount, api }) {
       }, [def.label]);
       items.push(btn);
     }
+
+    for (const cmd of commandButtons) {
+      if (!evaluateGuard(cmd.when, true)) continue;
+      const btn = h('button', {
+        class: 'sdo-module-button',
+        onClick: async () => sdo.commands.run(cmd.id)
+      }, [cmd.title]);
+      items.push(btn);
+    }
+
     toolbar.innerHTML = '';
     toolbar.append(...items);
   }
@@ -56,15 +69,36 @@ export function createModuleManagerUI({ sdo, mount, api }) {
     if (typeof maybeCleanup === 'function') panelCleanup = maybeCleanup;
   }
 
-  function refresh() {
+  async function renderSettings() {
+    settingsHost.innerHTML = '';
+    const tabs = sdo.settings.listTabs();
+    for (const tab of tabs) {
+      const tabEl = h('div', { class: 'sdo-settings-tab' }, [h('h4', {}, [tab.title])]);
+      for (const def of tab.items) {
+        for (const field of def.fields) {
+          if (typeof field.when === 'function' && !field.when({ api, sdo })) continue;
+          const row = h('label', { class: 'sdo-settings-row' }, [field.label]);
+          const value = await field.read({ api, sdo });
+          const input = h('input', { value: value ?? '', type: field.type === 'number' ? 'number' : 'text' });
+          input.addEventListener('change', () => field.write({ api, sdo }, input.value));
+          row.append(input);
+          tabEl.append(row);
+        }
+      }
+      settingsHost.append(tabEl);
+    }
+  }
+
+  async function refresh() {
     renderButtons();
     renderPanel();
+    await renderSettings();
   }
 
   const unsubscribe = sdo.ui.subscribe(refresh);
   refresh();
 
-  const root = h('div', { class: 'sdo-core-shell' }, [toolbar, panelsHost, status]);
+  const root = h('div', { class: 'sdo-core-shell' }, [toolbar, panelsHost, settingsHost, status]);
   mount.innerHTML = '';
   mount.append(root);
 

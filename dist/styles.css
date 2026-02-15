@@ -1,6 +1,8 @@
 .sdo-core-shell { display: grid; gap: 12px; align-items: start; font-family: sans-serif; }
-.sdo-toolbar { display: flex; gap: 8px; align-items: center; }
+.sdo-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .sdo-add-module, .sdo-module-button { border: 1px solid #333; background: #fafafa; padding: 6px 10px; cursor: pointer; }
-.sdo-panels { border: 1px solid #ddd; padding: 8px; border-radius: 6px; min-height: 32px; }
-.sdo-panel h3 { margin: 0 0 8px 0; font-size: 14px; }
+.sdo-panels, .sdo-settings { border: 1px solid #ddd; padding: 8px; border-radius: 6px; min-height: 32px; }
+.sdo-panel h3, .sdo-settings h4 { margin: 0 0 8px 0; font-size: 14px; }
+.sdo-settings-row { display: grid; gap: 4px; margin-bottom: 8px; font-size: 12px; }
+.sdo-settings-row input { border: 1px solid #bbb; padding: 4px 6px; }
 .sdo-status { color: #0f5132; font-size: 12px; }

@@ -12,39 +12,13 @@
     <script type="module">
       import { createSEDO, createMemoryStorage } from './dist/index.js';
       import { createModuleManagerUI } from './dist/ui/ui_core.js';
-
-      const exampleModule = {
-        id: 'module-example-inline',
-        version: '1.0.0',
-        init(ctx) {
-          ctx.ui.registerButton({
-            id: 'example:hello',
-            label: 'Hello module',
-            location: 'toolbar',
-            order: 50,
-            onClick() { alert('Hello from module button'); }
-          });
-
-          ctx.ui.registerPanel({
-            id: 'example:settings',
-            title: 'Example settings panel',
-            location: 'settings',
-            order: 10,
-            render(mountEl) {
-              const p = document.createElement('p');
-              p.textContent = 'Panel from module via ctx.ui.registerPanel()';
-              mountEl.append(p);
-              return () => p.remove();
-            }
-          });
-        }
-      };
+      import tableModule from './docs/reference-module.mjs';
 
       const sdo = createSEDO({
         storage: createMemoryStorage(),
         mount: document.getElementById('app'),
         createUI: createModuleManagerUI,
-        modules: [exampleModule]
+        modules: [tableModule]
       });
 
       await sdo.start();
