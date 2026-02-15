@@ -1,4 +1,4 @@
-import { canGoBackJournal, canGoBackSpace, currentJournalLabel } from '../core/navigation_core.js';
+import { canGoBackJournal, canGoBackSpace } from '../core/navigation_core.js';
 import { h } from './ui_primitives.js';
 
 function findById(items, id) {
@@ -13,6 +13,7 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   const toolbar = h('div', { class: 'sdo-toolbar' });
   const panelsHost = h('div', { class: 'sdo-panels' });
   const settingsHost = h('div', { class: 'sdo-settings' });
+  const modalLayer = h('div', { class: 'sdo-modal-layer', hidden: 'hidden' });
 
   const addButton = h('button', {
     class: 'sdo-add-module',
@@ -28,6 +29,45 @@ export function createModuleManagerUI({ sdo, mount, api }) {
     }
   }, ['+ Додати модуль']);
 
+  function openPicker({ title, items, onSelect, onAddCurrentLevel, getLabel }) {
+    modalLayer.innerHTML = '';
+    modalLayer.hidden = false;
+
+    const close = () => {
+      modalLayer.hidden = true;
+      modalLayer.innerHTML = '';
+    };
+
+    const list = h('div', { class: 'sdo-picker-list' });
+    for (const item of items) {
+      const row = h('button', {
+        class: 'sdo-picker-row',
+        onClick: async () => {
+          await onSelect(item);
+          close();
+        }
+      }, [getLabel(item)]);
+      list.append(row);
+    }
+
+    const addButton = h('button', {
+      class: 'sdo-picker-add',
+      onClick: async () => {
+        await onAddCurrentLevel();
+        close();
+      }
+    }, ['+ Додати на цей рівень']);
+
+    const modal = h('div', { class: 'sdo-picker-modal' }, [
+      h('div', { class: 'sdo-picker-title' }, [title]),
+      list,
+      addButton,
+      h('button', { class: 'sdo-picker-close', onClick: close }, ['Закрити'])
+    ]);
+
+    modalLayer.append(modal);
+  }
+
   function evaluateGuard(fn, fallback = true) {
     if (typeof fn !== 'function') return fallback;
     return Boolean(fn({ api, sdo }));
@@ -38,10 +78,15 @@ export function createModuleManagerUI({ sdo, mount, api }) {
     if (state.spaces.length > 0) return;
     await sdo.commit((next) => {
       const rootId = crypto.randomUUID();
-      next.spaces = [{ id: rootId, title: 'Root', parentId: null, childCount: 0 }];
+      next.spaces = [{ id: rootId, title: 'Простір 1', parentId: null, childCount: 0 }];
       next.activeSpaceId = rootId;
       next.activeJournalId = null;
     }, ['spaces_nodes_v2', 'nav_last_loc_v2']);
+  }
+
+  function getJournalLabel(journal) {
+    const idx = journal.index ? `${journal.index} ` : '';
+    return `${idx}${journal.title}`;
   }
 
   async function renderNavigation() {
@@ -50,11 +95,18 @@ export function createModuleManagerUI({ sdo, mount, api }) {
     const activeSpace = findById(state.spaces, state.activeSpaceId);
     const activeJournal = findById(state.journals, state.activeJournalId);
 
-    const spacesInCurrent = state.spaces.filter((x) => x.parentId === activeSpace?.id);
-    const journalsInSpace = state.journals.filter((x) => x.spaceId === state.activeSpaceId);
+    const spaceSiblings = state.spaces.filter((x) => x.parentId === (activeSpace?.parentId ?? null));
+    const spaceChildren = state.spaces.filter((x) => x.parentId === activeSpace?.id);
+
+    const journalSiblings = activeJournal
+      ? state.journals.filter((j) => j.spaceId === state.activeSpaceId && j.parentId === activeJournal.parentId)
+      : state.journals.filter((j) => j.spaceId === state.activeSpaceId && j.parentId === state.activeSpaceId);
+    const journalChildren = activeJournal
+      ? state.journals.filter((j) => j.spaceId === state.activeSpaceId && j.parentId === activeJournal.id)
+      : [];
 
     const spaceBackBtn = h('button', {
-      class: 'sdo-nav-button',
+      class: 'sdo-nav-btn sdo-nav-back',
       disabled: canGoBackSpace(activeSpace) ? null : 'disabled',
       onClick: async () => {
         if (!activeSpace?.parentId) return;
@@ -63,22 +115,66 @@ export function createModuleManagerUI({ sdo, mount, api }) {
           next.activeJournalId = null;
         }, ['nav_last_loc_v2']);
       }
-    }, ['← Простір']);
+    }, ['←']);
 
-    const addSpaceBtn = h('button', {
-      class: 'sdo-nav-button',
+    const spaceCurrentBtn = h('button', {
+      class: 'sdo-nav-btn sdo-nav-main',
+      onClick: () => openPicker({
+        title: 'Оберіть простір поточного рівня',
+        items: spaceSiblings,
+        getLabel: (item) => item.title,
+        onSelect: async (item) => {
+          await sdo.commit((next) => {
+            next.activeSpaceId = item.id;
+            next.activeJournalId = null;
+          }, ['nav_last_loc_v2']);
+        },
+        onAddCurrentLevel: async () => {
+          const title = window.prompt('Назва простору:', 'Новий простір');
+          if (!title) return;
+          await sdo.commit((next) => {
+            next.spaces = [...next.spaces, { id: crypto.randomUUID(), title, parentId: activeSpace?.parentId ?? null, childCount: 0 }];
+          }, ['spaces_nodes_v2']);
+        }
+      })
+    }, [activeSpace?.title ?? 'Простір']);
+
+    const spaceChildrenBtn = h('button', {
+      class: 'sdo-nav-btn sdo-nav-main',
+      disabled: spaceChildren.length > 0 ? null : 'disabled',
+      onClick: () => openPicker({
+        title: 'Оберіть підпростір поточного рівня',
+        items: spaceChildren,
+        getLabel: (item) => item.title,
+        onSelect: async (item) => {
+          await sdo.commit((next) => {
+            next.activeSpaceId = item.id;
+            next.activeJournalId = null;
+          }, ['nav_last_loc_v2']);
+        },
+        onAddCurrentLevel: async () => {
+          const title = window.prompt('Назва підпростору:', 'Новий підпростір');
+          if (!title || !activeSpace?.id) return;
+          await sdo.commit((next) => {
+            next.spaces = [...next.spaces, { id: crypto.randomUUID(), title, parentId: activeSpace.id, childCount: 0 }];
+          }, ['spaces_nodes_v2']);
+        }
+      })
+    }, [spaceChildren[0]?.title ?? '—']);
+
+    const spacePlusBtn = h('button', {
+      class: 'sdo-nav-btn sdo-nav-plus',
       onClick: async () => {
-        const title = window.prompt('Назва дочірнього простору:', 'Новий простір');
-        if (!title || !state.activeSpaceId) return;
+        const title = window.prompt('Назва підпростору:', 'Новий підпростір');
+        if (!title || !activeSpace?.id) return;
         await sdo.commit((next) => {
-          const node = { id: crypto.randomUUID(), title, parentId: state.activeSpaceId, childCount: 0 };
-          next.spaces = [...next.spaces, node];
+          next.spaces = [...next.spaces, { id: crypto.randomUUID(), title, parentId: activeSpace.id, childCount: 0 }];
         }, ['spaces_nodes_v2']);
       }
-    }, ['+ Простір']);
+    }, ['+']);
 
     const journalBackBtn = h('button', {
-      class: 'sdo-nav-button',
+      class: 'sdo-nav-btn sdo-nav-back',
       disabled: canGoBackJournal(activeJournal, state.activeSpaceId) ? null : 'disabled',
       onClick: async () => {
         if (!activeJournal || activeJournal.parentId === state.activeSpaceId) return;
@@ -86,49 +182,78 @@ export function createModuleManagerUI({ sdo, mount, api }) {
           next.activeJournalId = activeJournal.parentId;
         }, ['nav_last_loc_v2']);
       }
-    }, ['← Журнал']);
+    }, ['←']);
 
-    const addJournalBtn = h('button', {
-      class: 'sdo-nav-button',
+    const journalCurrentBtn = h('button', {
+      class: 'sdo-nav-btn sdo-nav-main',
+      onClick: () => openPicker({
+        title: 'Оберіть журнал поточного рівня',
+        items: journalSiblings,
+        getLabel: getJournalLabel,
+        onSelect: async (item) => {
+          await sdo.commit((next) => {
+            next.activeJournalId = item.id;
+          }, ['nav_last_loc_v2']);
+        },
+        onAddCurrentLevel: async () => {
+          if (!state.activeSpaceId) return;
+          const title = window.prompt('Назва журналу:', 'Вхідні поточні');
+          if (!title) return;
+          await sdo.commit((next) => {
+            const parentId = activeJournal ? activeJournal.parentId : state.activeSpaceId;
+            const node = { id: crypto.randomUUID(), spaceId: state.activeSpaceId, parentId, templateId: 'table-template-v1', title, childCount: 0 };
+            next.journals = [...next.journals, node];
+            next.activeJournalId = node.id;
+          }, ['journals_nodes_v2', 'nav_last_loc_v2']);
+        }
+      })
+    }, [activeJournal ? getJournalLabel(activeJournal) : 'Додай журнал']);
+
+    const journalChildrenBtn = h('button', {
+      class: 'sdo-nav-btn sdo-nav-main',
+      disabled: journalChildren.length > 0 ? null : 'disabled',
+      onClick: () => openPicker({
+        title: 'Оберіть піджурнал поточного рівня',
+        items: journalChildren,
+        getLabel: getJournalLabel,
+        onSelect: async (item) => {
+          await sdo.commit((next) => {
+            next.activeJournalId = item.id;
+          }, ['nav_last_loc_v2']);
+        },
+        onAddCurrentLevel: async () => {
+          if (!activeJournal) return;
+          const title = window.prompt('Назва піджурналу:', 'Піджурнал');
+          if (!title) return;
+          await sdo.commit((next) => {
+            const node = { id: crypto.randomUUID(), spaceId: state.activeSpaceId, parentId: activeJournal.id, templateId: 'table-template-v1', title, childCount: 0 };
+            next.journals = [...next.journals, node];
+            next.activeJournalId = node.id;
+          }, ['journals_nodes_v2', 'nav_last_loc_v2']);
+        }
+      })
+    }, [journalChildren[0] ? getJournalLabel(journalChildren[0]) : '—']);
+
+    const journalPlusBtn = h('button', {
+      class: 'sdo-nav-btn sdo-nav-plus',
       onClick: async () => {
         if (!state.activeSpaceId) return;
-        const title = window.prompt('Назва журналу:', 'Новий журнал');
-        const templateId = window.prompt('Template ID:', 'table-template-v1') ?? 'table-template-v1';
+        const title = window.prompt('Назва піджурналу:', activeJournal ? 'Піджурнал' : 'Вхідні поточні');
         if (!title) return;
-
         await sdo.commit((next) => {
-          const hasAny = next.journals.some((j) => j.spaceId === state.activeSpaceId);
-          const parentId = hasAny ? (next.activeJournalId ?? state.activeSpaceId) : state.activeSpaceId;
-          const node = {
-            id: crypto.randomUUID(),
-            spaceId: state.activeSpaceId,
-            parentId,
-            templateId,
-            title,
-            childCount: 0
-          };
+          const parentId = activeJournal ? activeJournal.id : state.activeSpaceId;
+          const node = { id: crypto.randomUUID(), spaceId: state.activeSpaceId, parentId, templateId: 'table-template-v1', title, childCount: 0 };
           next.journals = [...next.journals, node];
           next.activeJournalId = node.id;
         }, ['journals_nodes_v2', 'nav_last_loc_v2']);
       }
-    }, [journalsInSpace.length === 0 ? 'Додай журнал' : '+ Журнал']);
+    }, ['+']);
 
-    const spaceCard = h('div', { class: 'sdo-nav-card' }, [
-      h('strong', {}, ['Простори']),
-      h('div', { class: 'sdo-nav-current' }, [activeSpace?.title ?? '—']),
-      h('div', { class: 'sdo-nav-meta' }, [`Дочірніх: ${spacesInCurrent.length}`]),
-      h('div', { class: 'sdo-nav-actions' }, [spaceBackBtn, addSpaceBtn])
-    ]);
-
-    const journalCard = h('div', { class: 'sdo-nav-card' }, [
-      h('strong', {}, ['Журнали']),
-      h('div', { class: 'sdo-nav-current' }, [currentJournalLabel(state)]),
-      h('div', { class: 'sdo-nav-meta' }, [`У просторі: ${journalsInSpace.length}`]),
-      h('div', { class: 'sdo-nav-actions' }, [journalBackBtn, addJournalBtn])
-    ]);
+    const spaceRow = h('div', { class: 'sdo-nav-row' }, [spaceBackBtn, spaceCurrentBtn, spaceChildrenBtn, spacePlusBtn]);
+    const journalRow = h('div', { class: 'sdo-nav-row' }, [journalBackBtn, journalCurrentBtn, journalChildrenBtn, journalPlusBtn]);
 
     navigationHost.innerHTML = '';
-    navigationHost.append(spaceCard, journalCard);
+    navigationHost.append(spaceRow, journalRow);
   }
 
   function renderButtons() {
@@ -204,7 +329,7 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   const unsubscribeState = sdo.on('state:changed', refresh);
   refresh();
 
-  const root = h('div', { class: 'sdo-core-shell' }, [navigationHost, toolbar, panelsHost, settingsHost, status]);
+  const root = h('div', { class: 'sdo-core-shell' }, [navigationHost, toolbar, panelsHost, settingsHost, status, modalLayer]);
   mount.innerHTML = '';
   mount.append(root);
 
