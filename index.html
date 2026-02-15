@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SDO Core Demo</title>
+    <link rel="stylesheet" href="./dist/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script type="module">
+      import { createSEDO, createMemoryStorage } from './dist/index.js';
+      import { createModuleManagerUI } from './dist/ui/ui_core.js';
+      import tableModule from './docs/reference-module.mjs';
+
+      const sdo = createSEDO({
+        storage: createMemoryStorage(),
+        mount: document.getElementById('app'),
+        createUI: createModuleManagerUI,
+        modules: [tableModule]
+      });
+
+      await sdo.start();
+      window.sdo = sdo;
+    </script>
+  </body>
+</html>

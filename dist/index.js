@@ -1,9 +1,13 @@
 import { VERSION, BACKUP_FORMAT, DELTA_BACKUP_FORMAT, ENCRYPTED_BACKUP_FORMAT } from './types/public.js';
 import { assertStorage, createMemoryStorage } from './storage/storage_iface.js';
 import { NAV_KEYS, loadNavigationState, saveNavigationState } from './storage/db_nav.js';
-import { createModuleManagerUI } from './ui/ui_core.js';
 import { normalizeLocation } from './core/level_model_core.js';
 import { pushHistory } from './core/navigation_core.js';
+import { createUIRegistry } from './core/ui_registry_core.js';
+import { createSchemaRegistry } from './core/schema_registry_core.js';
+import { createCommandsRegistry } from './core/commands_registry_core.js';
+import { createSettingsRegistry } from './core/settings_registry_core.js';
+import { createJournalTemplatesContainer } from './stores/journal_templates_container.js';
 import { createIntegrity, decryptBackup, encryptBackup, verifyIntegrity } from './backup/crypto.js';
 
 function deepFreeze(obj) {

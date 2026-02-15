@@ -1,81 +1,59 @@
 # @sdo/core
 
-ESM-first ядро СЕДО з plugin-системою, v2-only моделлю навігації, backup/import API та базовим web-ready UI для підключення модулів під час виконання.
+ESM-first headless SEDO core with module registries: UI, Schema, Commands, Settings, Backup.
 
 ## Install
-
 ```bash
 npm i @sdo/core
 ```
 
 ## Quick start
-
 ```js
 import { createSEDO, createMemoryStorage } from '@sdo/core';
+import { createModuleManagerUI } from '@sdo/core/dist/ui/ui_core.js';
 
 const sdo = createSEDO({
   storage: createMemoryStorage(),
-  mount: document.getElementById('app')
+  mount: document.getElementById('app'),
+  createUI: createModuleManagerUI
 });
-
 await sdo.start();
 ```
-
-## Запуск через XAMPP (Apache)
-
-1. Зберіть `dist`:
-
-```bash
-npm install
-npm run build
-```
-
-2. Скопіюйте проект у `htdocs` (наприклад, `C:\xampp\htdocs\core`).
-3. Створіть `index.html`:
-
-```html
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <link rel="stylesheet" href="./dist/styles.css" />
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module">
-      import { createSEDO, createMemoryStorage } from './dist/index.js';
-      const sdo = createSEDO({ storage: createMemoryStorage(), mount: document.getElementById('app') });
-      await sdo.start();
-    </script>
-  </body>
-</html>
-```
-
-4. Запустіть Apache в XAMPP і відкрийте `http://localhost/core/`.
 
 ## Public API
 - `createSEDO(options)`
 - `createNavi(storage)`
 - `version`
-- `encryptBackup(bundle, password)` / `decryptBackup(envelope, password)`
-- `signBackup(payload, { privateKey, publicKey })` / `verifyBackup(envelope)`
-- `verifyIntegrity(bundle)`
+- backup helpers: `encryptBackup/decryptBackup/signBackup/verifyBackup/verifyIntegrity`
 
 SEDO instance:
-- `use(module)`
-- `loadModuleFromUrl(url)`
-- `start()` / `destroy()`
-- `getState()`
-- `commit(mutator, changedKeys?)`
-- `exportNavigationState()` / `importNavigationState(payload)`
-- `exportBackup(options)` / `importBackup(bundle, options)`
-- `exportDelta(options)` / `applyDelta(base, delta)`
-- `on(event, handler)` / `off(event, handler)`
+- module lifecycle: `use`, `loadModuleFromUrl`, `start`, `destroy`
+- state: `getState`, `commit`, `on/off`
+- UI registry: `ui.listButtons/listPanels/subscribe`
+- Schema registry: `schemas.get/list/resolve`
+- Commands registry: `commands.list/run`
+- Settings registry: `settings.listTabs/getKey/setKey`
+- backup: `exportBackup/importBackup/exportDelta/applyDelta`
 
-## Backup
-- Canonical JSON + SHA-256 integrity for plaintext backups.
-- Encrypted envelope via PBKDF2-SHA256 + AES-GCM-256.
-- Module-level providers via `ctx.backup.registerProvider(...)`.
+## XAMPP run
+1. `npm install && npm run build`
+2. Copy repo into `htdocs` (e.g. `C:\xampp\htdocs\core`)
+3. Open `http://localhost/core/` (repo includes ready `index.html`)
 
 ## Module authoring
-Див. повну специфікацію: [`docs/MODULES_SPEC.md`](./docs/MODULES_SPEC.md).
+- use only `ctx` API, never import core internals
+- keys must be namespaced (`moduleId:*`)
+- register schema/commands/settings/ui in `init(ctx)`
+- backup provider must support `describe/export/import` and `includeUserData`
+- delta uses keyed patch (`set/del`) with revisions
+
+See full spec: [`docs/MODULES_SPEC.md`](./docs/MODULES_SPEC.md)
+Reference module: [`docs/reference-module.mjs`](./docs/reference-module.mjs)
+
+
+## Journal templates container (@sdo/journal-templates, v0.1.0)
+- API: `sdo.journalTemplates.listTemplates/getTemplate/addTemplate/deleteTemplate`
+- storage keys: `templates:index`, `templates:tpl:${id}`
+- first run default template: `test` with 5 columns
+- UI: top-right **Шаблони** button opens templates manager modal
+- journal creation now picks template list from container (not hardcoded)
