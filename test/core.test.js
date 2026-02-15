@@ -95,3 +95,50 @@ test('importBackup fails on invalid integrity hash', async () => {
 
   await assert.rejects(() => sdo.importBackup(bundle), /integrity check failed/);
 });
+
+test('module can register ordered UI buttons and panels', async () => {
+  const sdo = createSEDO({ storage: createMemoryStorage() });
+  sdo.use({
+    id: 'ui-module',
+    version: '1.0.0',
+    init(ctx) {
+      ctx.ui.registerButton({ id: 'b2', label: 'B2', location: 'toolbar', order: 20, onClick() {} });
+      ctx.ui.registerButton({ id: 'b1', label: 'B1', location: 'toolbar', order: 10, onClick() {} });
+      ctx.ui.registerPanel({ id: 'p1', title: 'P1', location: 'settings', order: 5, render() {} });
+    }
+  });
+
+  const buttons = sdo.ui.listButtons({ location: 'toolbar' });
+  assert.deepEqual(buttons.map((b) => b.id), ['b1', 'b2']);
+  const panels = sdo.ui.listPanels({ location: 'settings' });
+  assert.equal(panels[0].id, 'p1');
+});
+
+test('destroy clears module UI registrations via unregister', async () => {
+  const sdo = createSEDO({ storage: createMemoryStorage() });
+  sdo.use({
+    id: 'temp-module',
+    version: '1.0.0',
+    init(ctx) {
+      ctx.ui.registerButton({ id: 'temp:b', label: 'Tmp', location: 'toolbar', onClick() {} });
+    }
+  });
+
+  assert.equal(sdo.ui.listButtons().length, 1);
+  await sdo.destroy();
+  assert.equal(sdo.ui.listButtons().length, 0);
+});
+
+test('ui registry enforces unique ids', () => {
+  const sdo = createSEDO({ storage: createMemoryStorage() });
+  assert.throws(() => {
+    sdo.use({
+      id: 'dup-module',
+      version: '1.0.0',
+      init(ctx) {
+        ctx.ui.registerButton({ id: 'dup', label: 'One', location: 'toolbar', onClick() {} });
+        ctx.ui.registerButton({ id: 'dup', label: 'Two', location: 'toolbar', onClick() {} });
+      }
+    });
+  }, /already registered/);
+});

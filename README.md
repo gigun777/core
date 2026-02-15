@@ -1,6 +1,6 @@
 # @sdo/core
 
-ESM-first ядро СЕДО з plugin-системою, v2-only моделлю навігації, backup/import API та базовим web-ready UI для підключення модулів під час виконання.
+ESM-first ядро СЕДО з plugin-системою, v2-only моделлю навігації, backup/import API та headless UI registry.
 
 ## Install
 
@@ -8,14 +8,16 @@ ESM-first ядро СЕДО з plugin-системою, v2-only моделлю �
 npm i @sdo/core
 ```
 
-## Quick start
+## Quick start (headless + host UI)
 
 ```js
 import { createSEDO, createMemoryStorage } from '@sdo/core';
+import { createModuleManagerUI } from '@sdo/core/dist/ui/ui_core.js';
 
 const sdo = createSEDO({
   storage: createMemoryStorage(),
-  mount: document.getElementById('app')
+  mount: document.getElementById('app'),
+  createUI: createModuleManagerUI
 });
 
 await sdo.start();
@@ -31,26 +33,7 @@ npm run build
 ```
 
 2. Скопіюйте проект у `htdocs` (наприклад, `C:\xampp\htdocs\core`).
-3. У репозиторії вже є готовий `index.html` (можете використати його без змін) або створіть власний:
-
-```html
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <link rel="stylesheet" href="./dist/styles.css" />
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module">
-      import { createSEDO, createMemoryStorage } from './dist/index.js';
-      const sdo = createSEDO({ storage: createMemoryStorage(), mount: document.getElementById('app') });
-      await sdo.start();
-    </script>
-  </body>
-</html>
-```
-
+3. У репозиторії вже є готовий `index.html`.
 4. Запустіть Apache в XAMPP і відкрийте `http://localhost/core/`.
 
 ## Public API
@@ -67,15 +50,18 @@ SEDO instance:
 - `start()` / `destroy()`
 - `getState()`
 - `commit(mutator, changedKeys?)`
+- `ui.listButtons(filter?)` / `ui.listPanels(filter?)` / `ui.subscribe(handler)`
 - `exportNavigationState()` / `importNavigationState(payload)`
 - `exportBackup(options)` / `importBackup(bundle, options)`
 - `exportDelta(options)` / `applyDelta(base, delta)`
 - `on(event, handler)` / `off(event, handler)`
 
-## Backup
-- Canonical JSON + SHA-256 integrity for plaintext backups.
-- Encrypted envelope via PBKDF2-SHA256 + AES-GCM-256.
-- Module-level providers via `ctx.backup.registerProvider(...)`.
+## Module guidelines
+- Підключення тільки через `ctx`, без імпорту внутрішніх файлів ядра.
+- UI інтеграція через `ctx.ui.registerButton/registerPanel` з `unregisterFn`.
+- storage keys тільки у namespace `moduleId:*`.
+- backup provider обов’язково має `describe/export/import`.
+- `includeUserData=false` має виключати user data.
+- Дельта формат: keyed patch (`set`/`del`) + ревізії.
 
-## Module authoring
-Див. повну специфікацію: [`docs/MODULES_SPEC.md`](./docs/MODULES_SPEC.md).
+Детально: [`docs/MODULES_SPEC.md`](./docs/MODULES_SPEC.md), приклад: [`docs/reference-module.mjs`](./docs/reference-module.mjs).
