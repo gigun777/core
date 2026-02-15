@@ -1,9 +1,15 @@
+import { canGoBackJournal, canGoBackSpace, currentJournalLabel } from '../core/navigation_core.js';
 import { h } from './ui_primitives.js';
+
+function findById(items, id) {
+  return items.find((item) => item.id === id) ?? null;
+}
 
 export function createModuleManagerUI({ sdo, mount, api }) {
   if (!mount) return null;
 
   const status = h('div', { class: 'sdo-status' }, ['Ready']);
+  const navigationHost = h('div', { class: 'sdo-navigation' });
   const toolbar = h('div', { class: 'sdo-toolbar' });
   const panelsHost = h('div', { class: 'sdo-panels' });
   const settingsHost = h('div', { class: 'sdo-settings' });
@@ -25,6 +31,104 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   function evaluateGuard(fn, fallback = true) {
     if (typeof fn !== 'function') return fallback;
     return Boolean(fn({ api, sdo }));
+  }
+
+  async function ensureRootSpace() {
+    const state = sdo.getState();
+    if (state.spaces.length > 0) return;
+    await sdo.commit((next) => {
+      const rootId = crypto.randomUUID();
+      next.spaces = [{ id: rootId, title: 'Root', parentId: null, childCount: 0 }];
+      next.activeSpaceId = rootId;
+      next.activeJournalId = null;
+    }, ['spaces_nodes_v2', 'nav_last_loc_v2']);
+  }
+
+  async function renderNavigation() {
+    await ensureRootSpace();
+    const state = sdo.getState();
+    const activeSpace = findById(state.spaces, state.activeSpaceId);
+    const activeJournal = findById(state.journals, state.activeJournalId);
+
+    const spacesInCurrent = state.spaces.filter((x) => x.parentId === activeSpace?.id);
+    const journalsInSpace = state.journals.filter((x) => x.spaceId === state.activeSpaceId);
+
+    const spaceBackBtn = h('button', {
+      class: 'sdo-nav-button',
+      disabled: canGoBackSpace(activeSpace) ? null : 'disabled',
+      onClick: async () => {
+        if (!activeSpace?.parentId) return;
+        await sdo.commit((next) => {
+          next.activeSpaceId = activeSpace.parentId;
+          next.activeJournalId = null;
+        }, ['nav_last_loc_v2']);
+      }
+    }, ['← Простір']);
+
+    const addSpaceBtn = h('button', {
+      class: 'sdo-nav-button',
+      onClick: async () => {
+        const title = window.prompt('Назва дочірнього простору:', 'Новий простір');
+        if (!title || !state.activeSpaceId) return;
+        await sdo.commit((next) => {
+          const node = { id: crypto.randomUUID(), title, parentId: state.activeSpaceId, childCount: 0 };
+          next.spaces = [...next.spaces, node];
+        }, ['spaces_nodes_v2']);
+      }
+    }, ['+ Простір']);
+
+    const journalBackBtn = h('button', {
+      class: 'sdo-nav-button',
+      disabled: canGoBackJournal(activeJournal, state.activeSpaceId) ? null : 'disabled',
+      onClick: async () => {
+        if (!activeJournal || activeJournal.parentId === state.activeSpaceId) return;
+        await sdo.commit((next) => {
+          next.activeJournalId = activeJournal.parentId;
+        }, ['nav_last_loc_v2']);
+      }
+    }, ['← Журнал']);
+
+    const addJournalBtn = h('button', {
+      class: 'sdo-nav-button',
+      onClick: async () => {
+        if (!state.activeSpaceId) return;
+        const title = window.prompt('Назва журналу:', 'Новий журнал');
+        const templateId = window.prompt('Template ID:', 'table-template-v1') ?? 'table-template-v1';
+        if (!title) return;
+
+        await sdo.commit((next) => {
+          const hasAny = next.journals.some((j) => j.spaceId === state.activeSpaceId);
+          const parentId = hasAny ? (next.activeJournalId ?? state.activeSpaceId) : state.activeSpaceId;
+          const node = {
+            id: crypto.randomUUID(),
+            spaceId: state.activeSpaceId,
+            parentId,
+            templateId,
+            title,
+            childCount: 0
+          };
+          next.journals = [...next.journals, node];
+          next.activeJournalId = node.id;
+        }, ['journals_nodes_v2', 'nav_last_loc_v2']);
+      }
+    }, [journalsInSpace.length === 0 ? 'Додай журнал' : '+ Журнал']);
+
+    const spaceCard = h('div', { class: 'sdo-nav-card' }, [
+      h('strong', {}, ['Простори']),
+      h('div', { class: 'sdo-nav-current' }, [activeSpace?.title ?? '—']),
+      h('div', { class: 'sdo-nav-meta' }, [`Дочірніх: ${spacesInCurrent.length}`]),
+      h('div', { class: 'sdo-nav-actions' }, [spaceBackBtn, addSpaceBtn])
+    ]);
+
+    const journalCard = h('div', { class: 'sdo-nav-card' }, [
+      h('strong', {}, ['Журнали']),
+      h('div', { class: 'sdo-nav-current' }, [currentJournalLabel(state)]),
+      h('div', { class: 'sdo-nav-meta' }, [`У просторі: ${journalsInSpace.length}`]),
+      h('div', { class: 'sdo-nav-actions' }, [journalBackBtn, addJournalBtn])
+    ]);
+
+    navigationHost.innerHTML = '';
+    navigationHost.append(spaceCard, journalCard);
   }
 
   function renderButtons() {
@@ -90,21 +194,24 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   }
 
   async function refresh() {
+    await renderNavigation();
     renderButtons();
     renderPanel();
     await renderSettings();
   }
 
-  const unsubscribe = sdo.ui.subscribe(refresh);
+  const unsubscribeRegistry = sdo.ui.subscribe(refresh);
+  const unsubscribeState = sdo.on('state:changed', refresh);
   refresh();
 
-  const root = h('div', { class: 'sdo-core-shell' }, [toolbar, panelsHost, settingsHost, status]);
+  const root = h('div', { class: 'sdo-core-shell' }, [navigationHost, toolbar, panelsHost, settingsHost, status]);
   mount.innerHTML = '';
   mount.append(root);
 
   return {
     destroy() {
-      unsubscribe();
+      unsubscribeRegistry();
+      unsubscribeState();
       panelCleanup?.();
       root.remove();
     }

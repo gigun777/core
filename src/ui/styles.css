@@ -1,8 +1,25 @@
-.sdo-core-shell { display: grid; gap: 12px; align-items: start; font-family: sans-serif; }
-.sdo-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.sdo-add-module, .sdo-module-button { border: 1px solid #333; background: #fafafa; padding: 6px 10px; cursor: pointer; }
-.sdo-panels, .sdo-settings { border: 1px solid #ddd; padding: 8px; border-radius: 6px; min-height: 32px; }
+body { margin: 0; }
+.sdo-core-shell {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+  justify-items: center;
+  font-family: sans-serif;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 16px;
+}
+.sdo-navigation { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px; width: 100%; }
+.sdo-nav-card { border: 1px solid #ddd; border-radius: 6px; padding: 8px; background: #fff; }
+.sdo-nav-current { font-size: 15px; margin-top: 6px; font-weight: 600; }
+.sdo-nav-meta { font-size: 12px; color: #666; margin: 4px 0 8px; }
+.sdo-nav-actions { display: flex; gap: 6px; }
+.sdo-nav-button,
+.sdo-add-module,
+.sdo-module-button { border: 1px solid #333; background: #fafafa; padding: 6px 10px; cursor: pointer; }
+.sdo-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; justify-content: center; }
+.sdo-panels, .sdo-settings { border: 1px solid #ddd; padding: 8px; border-radius: 6px; min-height: 32px; width: 100%; }
 .sdo-panel h3, .sdo-settings h4 { margin: 0 0 8px 0; font-size: 14px; }
 .sdo-settings-row { display: grid; gap: 4px; margin-bottom: 8px; font-size: 12px; }
 .sdo-settings-row input { border: 1px solid #bbb; padding: 4px 6px; }
-.sdo-status { color: #0f5132; font-size: 12px; }
+.sdo-status { color: #0f5132; font-size: 12px; justify-self: center; }
