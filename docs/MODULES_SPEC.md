@@ -1,86 +1,73 @@
-# Module system specification for `@sdo/core` (ESM, npm-style)
+# Module authoring specification for `@sdo/core`
 
-## Module contract
+## 1) Module contract
+A module is an ESM object:
+
 ```js
-export default { id: 'my-module', version: '1.0.0', init(ctx) {} };
+export default {
+  id: 'table',
+  version: '1.0.0',
+  init(ctx) {
+    // register commands/ui/schemas/backup provider
+  }
+};
 ```
-- `id` unique, semver version.
-- `init(ctx)` called once.
-- Modules must not import `@sdo/core/src/*` internals; integration only via `ctx`.
-
-## Registries in ctx
-- `ctx.registerSchema(schemaDef) -> unregisterFn`
-- `ctx.registerCommands(commandDefs | (ctx)=>commandDefs) -> unregisterFn`
-- `ctx.registerSettings(settingsDef) -> unregisterFn`
-- `ctx.schemas.get/list/resolve`
-- `ctx.commands.list/run`
-- `ctx.settings.listTabs/getKey/setKey`
-
-## Schema Registry
-`SchemaDef` (data-only):
-- `id`, `version`, `domain`, `appliesTo`, `fields[]`
-- optional `formats[]`, `validators[]`, `migrations[]`
 
 Rules:
-- unique `id`
-- re-register same `id` only with higher version
-- unregister removes schema
+- `id` must be globally unique (`kebab-case`).
+- `version` must follow semver.
+- Modules must not import internal `@sdo/core/src/*` files.
+- All integration goes through `ctx` only.
 
-## Commands Registry
-`CommandDef`:
-- required: `id`, `title`, `run(ctx,args)`
-- optional: `group`, `order`, `when(ctx)`, `hotkey`, `icon`, `menu`, `confirm`
+## 2) Context API (`ctx`)
+- `ctx.api.getState()` — readonly snapshot.
+- `ctx.api.dispatch(action)` — controlled state action.
+- `ctx.storage.get/set/del/list` — storage adapter only.
+- `ctx.ui.registerButton/registerPanel` — optional UI integrations.
+- `ctx.registerSchema/registerCommands/registerSettings` — extension points.
+- `ctx.backup.registerProvider(provider)` — backup provider contract.
 
-Rules:
-- unique id
-- must work in headless mode
-- no direct DOM dependency inside command logic
+## 3) Backup provider requirements
+```js
+ctx.backup.registerProvider({
+  id: 'table',
+  version: '1.3.0',
+  export: async (opts) => ({ settings: {}, userData: opts.includeUserData ? {} : undefined }),
+  import: async (payload, opts) => ({ applied: true, warnings: [] }),
+  describe: () => ({ settings: ['table.columns'], userData: ['table.records'] })
+});
+```
 
-## Settings Registry
-`SettingsDef`:
-- `id`, `tab { id,title,order? }`, `fields[]`
+Provider notes:
+- Return JSON-compatible objects only.
+- Filter secrets/tokens unless user explicitly approves.
+- Support partial import (`mode: merge|replace`) where possible.
+- Keep module keys namespaced (`table:*`, `export:*`, etc).
 
-`SettingsFieldDef`:
-- `key`, `label`, `type`, `read(ctx)`, `write(ctx,value)`
-- optional: `default`, `options`, `when(ctx)`
+## 4) Delta-ready module logic
+For large data modules, implement incremental support:
+- Keep a module revision counter and change log.
+- Export keyed patch:
 
-Rules:
-- key must be namespaced (`moduleId:*`)
-- read/write should use `ctx.storage`
-- deterministic values for backup
-
-## UI Registry
-- `ctx.ui.registerButton(def) -> unregisterFn`
-- `ctx.ui.registerPanel(def) -> unregisterFn`
-- `ctx.ui.listButtons/listPanels`
-
-Use `order`, `location`, `enabled/visible` guards.
-
-## Storage namespacing
-Use only prefixed keys:
-- `module-example-table:settings`
-- `module-example-table:userData`
-
-## Backup/Encrypt/Sign/Delta
-- Backup provider: `ctx.backup.registerProvider({ id, version, describe, export, import })`
-- `includeUserData=false` must exclude user data.
-- `mode: merge|replace` for imports.
-- Encrypt/sign handled by core backup manager (PBKDF2 + AES-GCM, SHA-256 integrity, optional ECDSA).
-- Delta: keyed patch `{ revision, set, del }` + module revision/change-log.
-
-## Reference module
-See [`docs/reference-module.mjs`](./reference-module.mjs) (`@sdo/module-example-table`), which demonstrates schema/commands/settings/UI/backup/delta.
-
-
-## Journal templates container
-Core includes `@sdo/journal-templates`-style container API on `sdo.journalTemplates`:
-- `listTemplates()`
-- `getTemplate(id)`
-- `addTemplate(template)`
-- `deleteTemplate(id)`
-
-Template model:
 ```json
-{ "id": "test", "title": "test", "columns": [{"key":"c1","label":"1"}] }
+{ "revision": 42, "set": {"table:rows:123": {...}}, "del": ["table:rows:100"] }
 ```
-Storage keys: `templates:index`, `templates:tpl:${id}`.
+
+- Accept `mode: "patch"` during import.
+
+## 5) Web runtime module loading
+Core can load modules in browser directly:
+
+```js
+await sdo.loadModuleFromUrl('https://cdn.example.com/sdo-module-table/index.js');
+```
+
+Module MUST ship ESM output and export either:
+- `default` module object, or
+- named `module` export.
+
+## 6) Security and compatibility
+- Avoid side effects at import time.
+- Validate all external payloads.
+- Use `formatVersion`/`moduleVersion` migrations for backups.
+- Keep backwards compatibility in MINOR versions, break only in MAJOR.

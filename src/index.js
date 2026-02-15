@@ -1,13 +1,9 @@
 import { VERSION, BACKUP_FORMAT, DELTA_BACKUP_FORMAT, ENCRYPTED_BACKUP_FORMAT } from './types/public.js';
 import { assertStorage, createMemoryStorage } from './storage/storage_iface.js';
 import { NAV_KEYS, loadNavigationState, saveNavigationState } from './storage/db_nav.js';
+import { createModuleManagerUI } from './ui/ui_core.js';
 import { normalizeLocation } from './core/level_model_core.js';
 import { pushHistory } from './core/navigation_core.js';
-import { createUIRegistry } from './core/ui_registry_core.js';
-import { createSchemaRegistry } from './core/schema_registry_core.js';
-import { createCommandsRegistry } from './core/commands_registry_core.js';
-import { createSettingsRegistry } from './core/settings_registry_core.js';
-import { createJournalTemplatesContainer } from './stores/journal_templates_container.js';
 import { createIntegrity, decryptBackup, encryptBackup, verifyIntegrity } from './backup/crypto.js';
 
 function deepFreeze(obj) {
@@ -42,12 +38,6 @@ export function createSEDO(options = {}) {
   const listeners = new Map();
   const modules = new Map();
   const backupProviders = new Map();
-  const moduleDisposers = new Map();
-  const uiRegistry = createUIRegistry();
-  const schemaRegistry = createSchemaRegistry();
-  const settingsRegistry = createSettingsRegistry();
-  const journalTemplates = createJournalTemplatesContainer(storage);
-
   const state = {
     spaces: [],
     journals: [],
@@ -57,11 +47,6 @@ export function createSEDO(options = {}) {
     started: false,
     revision: 0
   };
-
-  function getRuntimeCtx() {
-    return { api, storage, sdo: instance };
-  }
-  const commandsRegistry = createCommandsRegistry(getRuntimeCtx);
 
   let ui = null;
 
@@ -87,104 +72,30 @@ export function createSEDO(options = {}) {
     }
   };
 
-  function createModuleUIApi(moduleId) {
-    const disposers = moduleDisposers.get(moduleId) ?? [];
-    moduleDisposers.set(moduleId, disposers);
-    function track(unregisterFn) {
-      disposers.push(unregisterFn);
-      return () => {
-        unregisterFn();
-        const idx = disposers.indexOf(unregisterFn);
-        if (idx >= 0) disposers.splice(idx, 1);
-      };
-    }
-    return {
-      registerButton(def) { return track(uiRegistry.registerButton({ ...def })); },
-      registerPanel(def) { return track(uiRegistry.registerPanel({ ...def })); },
-      listButtons(filter) { return uiRegistry.listButtons(filter); },
-      listPanels(filter) { return uiRegistry.listPanels(filter); }
-    };
-  }
-
-  function createModuleCtx(moduleId) {
-    const disposers = moduleDisposers.get(moduleId) ?? [];
-    moduleDisposers.set(moduleId, disposers);
-    const track = (fn) => {
-      disposers.push(fn);
-      return () => {
-        fn();
-        const idx = disposers.indexOf(fn);
-        if (idx >= 0) disposers.splice(idx, 1);
-      };
-    };
-
-    return {
-      api,
-      storage,
-      ui: createModuleUIApi(moduleId),
-      registerSchema(schemaDef) { return track(schemaRegistry.register(schemaDef)); },
-      registerCommands(commandDefs) { return track(commandsRegistry.register(commandDefs)); },
-      registerSettings(settingsDef) { return track(settingsRegistry.register(settingsDef)); },
-      schemas: {
-        get: (id) => schemaRegistry.get(id),
-        list: (filter) => schemaRegistry.list(filter),
-        resolve: (target) => schemaRegistry.resolve(target)
-      },
-      commands: {
-        run: (id, args) => commandsRegistry.run(id, args),
-        list: (filter) => commandsRegistry.list(filter)
-      },
-      settings: {
-        listTabs: () => settingsRegistry.listTabs(),
-        getKey: (key) => storage.get(key),
-        setKey: (key, value) => storage.set(key, value)
-      },
-      backup: {
-        registerProvider(provider) {
-          if (!provider?.id || typeof provider.export !== 'function' || typeof provider.import !== 'function' || typeof provider.describe !== 'function') {
-            throw new Error('Backup provider must include id/describe/export/import');
-          }
-          backupProviders.set(provider.id, provider);
-          return track(() => backupProviders.delete(provider.id));
-        }
-      }
-    };
-  }
-
   const instance = {
     version: VERSION,
-    ui: {
-      listButtons: (filter) => uiRegistry.listButtons(filter),
-      listPanels: (filter) => uiRegistry.listPanels(filter),
-      subscribe: (handler) => uiRegistry.subscribe(handler)
-    },
-    schemas: {
-      get: (id) => schemaRegistry.get(id),
-      list: (filter) => schemaRegistry.list(filter),
-      resolve: (target) => schemaRegistry.resolve(target)
-    },
-    commands: {
-      run: (id, args) => commandsRegistry.run(id, args),
-      list: (filter) => commandsRegistry.list(filter)
-    },
-    settings: {
-      listTabs: () => settingsRegistry.listTabs(),
-      getKey: (key) => storage.get(key),
-      setKey: (key, value) => storage.set(key, value)
-    },
-    journalTemplates: {
-      listTemplates: () => journalTemplates.listTemplates(),
-      listTemplateEntities: () => journalTemplates.listTemplateEntities(),
-      getTemplate: (id) => journalTemplates.getTemplate(id),
-      addTemplate: (template) => journalTemplates.addTemplate(template),
-      deleteTemplate: (id) => journalTemplates.deleteTemplate(id),
-      exportDelta: (sinceRevision = 0) => journalTemplates.exportDelta(sinceRevision),
-      applyDelta: (patch) => journalTemplates.applyDelta(patch)
-    },
     use(module) {
       if (!module?.id || typeof module?.init !== 'function') throw new Error('Invalid module');
       if (modules.has(module.id)) return instance;
-      const ctx = createModuleCtx(module.id);
+      const ctx = {
+        api,
+        storage,
+        ui: {
+          registerButton: (..._args) => undefined,
+          registerPanel: (..._args) => undefined
+        },
+        registerSchema: () => undefined,
+        registerCommands: () => undefined,
+        registerSettings: () => undefined,
+        backup: {
+          registerProvider(provider) {
+            if (!provider?.id || typeof provider.export !== 'function' || typeof provider.import !== 'function') {
+              throw new Error('Backup provider must include id/export/import');
+            }
+            backupProviders.set(provider.id, provider);
+          }
+        }
+      };
       module.init(ctx);
       modules.set(module.id, module);
       emit('module:used', module.id);
@@ -197,20 +108,6 @@ export function createSEDO(options = {}) {
       return plugin;
     },
     async start() {
-      await journalTemplates.ensureInitialized();
-      backupProviders.set('journal-templates', {
-        id: 'journal-templates',
-        version: '0.1.0',
-        describe: () => ({ settings: ['templates:*'], userData: [] }),
-        export: async () => ({ templates: await journalTemplates.listTemplateEntities() }),
-        import: async (payload) => {
-          for (const template of payload.templates ?? []) {
-            await journalTemplates.deleteTemplate(template.id);
-            await journalTemplates.addTemplate(template);
-          }
-          return { applied: true, warnings: [] };
-        }
-      });
       const nav = await loadNavigationState(storage);
       state.spaces = nav.spaces;
       state.journals = nav.journals;
@@ -219,27 +116,15 @@ export function createSEDO(options = {}) {
       state.activeSpaceId = loc.activeSpaceId;
       state.activeJournalId = loc.activeJournalId;
       state.started = true;
-      if (options.mount && typeof options.createUI === 'function') {
-        ui = options.createUI({ sdo: instance, mount: options.mount, api });
-      }
+      if (options.mount) ui = createModuleManagerUI({ sdo: instance, mount: options.mount });
       emit('started', api.getState());
       return instance;
     },
     async destroy() {
-      for (const [moduleId, disposers] of moduleDisposers.entries()) {
-        for (const dispose of disposers.splice(0)) dispose();
-        const module = modules.get(moduleId);
-        if (typeof module?.destroy === 'function') await module.destroy();
-      }
-      uiRegistry.clear();
-      schemaRegistry.clear();
-      settingsRegistry.clear();
-      commandsRegistry.clear();
-      ui?.destroy?.();
+      ui?.destroy();
       listeners.clear();
       modules.clear();
       backupProviders.clear();
-      moduleDisposers.clear();
     },
     getState: api.getState,
     async commit(mutator, changedKeys = []) {
@@ -264,7 +149,11 @@ export function createSEDO(options = {}) {
     async importNavigationState(payload) {
       const nav = fromNavPayload(payload);
       await saveNavigationState(storage, nav);
-      const loc = normalizeLocation({ spaces: nav.spaces, journals: nav.journals, lastLoc: nav.lastLoc });
+      const loc = normalizeLocation({
+        spaces: nav.spaces,
+        journals: nav.journals,
+        lastLoc: nav.lastLoc
+      });
       state.spaces = nav.spaces;
       state.journals = nav.journals;
       state.history = nav.history;
@@ -289,19 +178,32 @@ export function createSEDO(options = {}) {
       if (opts.includeNavigation !== false && (scope === 'all' || scope === 'userData' || scope === 'modules')) {
         bundle.core.navigation = await instance.exportNavigationState();
       }
+
       const moduleIds = opts.modules ?? [...backupProviders.keys()];
       for (const id of moduleIds) {
         const provider = backupProviders.get(id);
         if (!provider) continue;
-        bundle.modules[id] = { moduleVersion: provider.version, data: await provider.export({ includeUserData: opts.includeUserData !== false, scope }) };
+        bundle.modules[id] = {
+          moduleVersion: provider.version,
+          data: await provider.export({ includeUserData: opts.includeUserData !== false, scope })
+        };
       }
+
       bundle.integrity = await createIntegrity(bundle);
       return opts.encrypt?.enabled ? encryptBackup(bundle, opts.encrypt.password) : bundle;
     },
     async importBackup(input, opts = {}) {
-      const bundle = input?.format === ENCRYPTED_BACKUP_FORMAT ? await decryptBackup(input, opts.decrypt?.password ?? '') : input;
-      if (bundle?.format !== BACKUP_FORMAT) throw new Error('Unsupported backup format');
-      if (!await verifyIntegrity(bundle)) throw new Error('Backup integrity check failed');
+      const bundle = input?.format === ENCRYPTED_BACKUP_FORMAT
+        ? await decryptBackup(input, opts.decrypt?.password ?? '')
+        : input;
+
+      if (bundle?.format !== BACKUP_FORMAT) {
+        throw new Error('Unsupported backup format');
+      }
+      const integrityOk = await verifyIntegrity(bundle);
+      if (!integrityOk) {
+        throw new Error('Backup integrity check failed');
+      }
 
       const report = { core: { applied: false, warnings: [] }, navigation: { applied: false, warnings: [] }, modules: {} };
       if (bundle.core?.settings) {
@@ -317,7 +219,10 @@ export function createSEDO(options = {}) {
           report.modules[id] = { applied: false, warnings: ['provider not found'] };
           continue;
         }
-        report.modules[id] = await provider.import(payload.data, { mode: opts.mode ?? 'merge', includeUserData: opts.includeUserData !== false });
+        report.modules[id] = await provider.import(payload.data, {
+          mode: opts.mode ?? 'merge',
+          includeUserData: opts.includeUserData !== false
+        });
       }
       return report;
     },
@@ -352,6 +257,7 @@ export function createSEDO(options = {}) {
   if (Array.isArray(options.modules)) {
     for (const module of options.modules) instance.use(module);
   }
+
   return instance;
 }
 
