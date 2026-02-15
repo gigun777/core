@@ -57,6 +57,9 @@ body { margin: 0; background: #f6f7f8; }
   place-items: center;
   z-index: 100;
 }
+.sdo-modal-layer[hidden] {
+  display: none !important;
+}
 .sdo-picker-modal {
   width: min(540px, 92vw);
   max-height: 72vh;

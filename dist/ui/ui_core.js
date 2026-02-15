@@ -13,7 +13,8 @@ export function createModuleManagerUI({ sdo, mount, api }) {
   const toolbar = h('div', { class: 'sdo-toolbar' });
   const panelsHost = h('div', { class: 'sdo-panels' });
   const settingsHost = h('div', { class: 'sdo-settings' });
-  const modalLayer = h('div', { class: 'sdo-modal-layer', hidden: 'hidden' });
+  const modalLayer = h('div', { class: 'sdo-modal-layer' });
+  modalLayer.hidden = true;
 
   const addButton = h('button', {
     class: 'sdo-add-module',
