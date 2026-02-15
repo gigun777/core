@@ -1,0 +1,278 @@
+import { VERSION, BACKUP_FORMAT, DELTA_BACKUP_FORMAT, ENCRYPTED_BACKUP_FORMAT } from './types/public.js';
+import { assertStorage, createMemoryStorage } from './storage/storage_iface.js';
+import { NAV_KEYS, loadNavigationState, saveNavigationState } from './storage/db_nav.js';
+import { createModuleManagerUI } from './ui/ui_core.js';
+import { normalizeLocation } from './core/level_model_core.js';
+import { pushHistory } from './core/navigation_core.js';
+import { createIntegrity, decryptBackup, encryptBackup, verifyIntegrity } from './backup/crypto.js';
+
+function deepFreeze(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  Object.freeze(obj);
+  for (const value of Object.values(obj)) deepFreeze(value);
+  return obj;
+}
+
+function toNavPayload(nav) {
+  return {
+    spaces_nodes_v2: nav.spaces ?? [],
+    journals_nodes_v2: nav.journals ?? [],
+    nav_last_loc_v2: nav.lastLoc ?? null,
+    nav_history_v2: nav.history ?? []
+  };
+}
+
+function fromNavPayload(payload) {
+  return {
+    spaces: payload.spaces_nodes_v2 ?? [],
+    journals: payload.journals_nodes_v2 ?? [],
+    lastLoc: payload.nav_last_loc_v2 ?? null,
+    history: payload.nav_history_v2 ?? []
+  };
+}
+
+export function createSEDO(options = {}) {
+  const storage = options.storage ?? createMemoryStorage();
+  assertStorage(storage);
+
+  const listeners = new Map();
+  const modules = new Map();
+  const backupProviders = new Map();
+  const state = {
+    spaces: [],
+    journals: [],
+    history: [],
+    activeSpaceId: null,
+    activeJournalId: null,
+    started: false,
+    revision: 0
+  };
+
+  let ui = null;
+
+  function emit(event, payload) {
+    for (const fn of listeners.get(event) ?? []) fn(payload);
+  }
+
+  async function bumpRevision(changedKeys = []) {
+    state.revision += 1;
+    await storage.set(NAV_KEYS.revision, state.revision);
+    const log = (await storage.get(NAV_KEYS.revisionLog)) ?? [];
+    log.push({ rev: state.revision, changedKeys, at: new Date().toISOString() });
+    await storage.set(NAV_KEYS.revisionLog, log.slice(-500));
+  }
+
+  const api = {
+    getState: () => deepFreeze(structuredClone(state)),
+    dispatch(action) {
+      if (typeof action?.reduce !== 'function') throw new Error('Action must include reduce(state)');
+      action.reduce(state);
+      emit('state:changed', api.getState());
+      return state;
+    }
+  };
+
+  const instance = {
+    version: VERSION,
+    use(module) {
+      if (!module?.id || typeof module?.init !== 'function') throw new Error('Invalid module');
+      if (modules.has(module.id)) return instance;
+      const ctx = {
+        api,
+        storage,
+        ui: {
+          registerButton: (..._args) => undefined,
+          registerPanel: (..._args) => undefined
+        },
+        registerSchema: () => undefined,
+        registerCommands: () => undefined,
+        registerSettings: () => undefined,
+        backup: {
+          registerProvider(provider) {
+            if (!provider?.id || typeof provider.export !== 'function' || typeof provider.import !== 'function') {
+              throw new Error('Backup provider must include id/export/import');
+            }
+            backupProviders.set(provider.id, provider);
+          }
+        }
+      };
+      module.init(ctx);
+      modules.set(module.id, module);
+      emit('module:used', module.id);
+      return instance;
+    },
+    async loadModuleFromUrl(url) {
+      const mod = await import(url);
+      const plugin = mod.default ?? mod.module ?? mod;
+      instance.use(plugin);
+      return plugin;
+    },
+    async start() {
+      const nav = await loadNavigationState(storage);
+      state.spaces = nav.spaces;
+      state.journals = nav.journals;
+      state.history = nav.history;
+      const loc = normalizeLocation({ spaces: state.spaces, journals: state.journals, lastLoc: nav.lastLoc });
+      state.activeSpaceId = loc.activeSpaceId;
+      state.activeJournalId = loc.activeJournalId;
+      state.started = true;
+      if (options.mount) ui = createModuleManagerUI({ sdo: instance, mount: options.mount });
+      emit('started', api.getState());
+      return instance;
+    },
+    async destroy() {
+      ui?.destroy();
+      listeners.clear();
+      modules.clear();
+      backupProviders.clear();
+    },
+    getState: api.getState,
+    async commit(mutator, changedKeys = []) {
+      mutator(state);
+      state.history = pushHistory(state.history, {
+        activeSpaceId: state.activeSpaceId,
+        activeJournalId: state.activeJournalId,
+        at: new Date().toISOString()
+      });
+      await saveNavigationState(storage, {
+        spaces: state.spaces,
+        journals: state.journals,
+        lastLoc: { activeSpaceId: state.activeSpaceId, activeJournalId: state.activeJournalId },
+        history: state.history
+      });
+      await bumpRevision(changedKeys);
+      emit('state:changed', api.getState());
+    },
+    async exportNavigationState() {
+      return toNavPayload(await loadNavigationState(storage));
+    },
+    async importNavigationState(payload) {
+      const nav = fromNavPayload(payload);
+      await saveNavigationState(storage, nav);
+      const loc = normalizeLocation({
+        spaces: nav.spaces,
+        journals: nav.journals,
+        lastLoc: nav.lastLoc
+      });
+      state.spaces = nav.spaces;
+      state.journals = nav.journals;
+      state.history = nav.history;
+      state.activeSpaceId = loc.activeSpaceId;
+      state.activeJournalId = loc.activeJournalId;
+      return { applied: true, warnings: [] };
+    },
+    async exportBackup(opts = {}) {
+      const scope = opts.scope ?? 'all';
+      const backupId = crypto.randomUUID();
+      const bundle = {
+        format: BACKUP_FORMAT,
+        formatVersion: 1,
+        backupId,
+        createdAt: new Date().toISOString(),
+        app: { name: '@sdo/core', version: VERSION },
+        scope,
+        core: { navigation: null, settings: { coreSettings: (await storage.get(NAV_KEYS.coreSettings)) ?? {} } },
+        modules: {},
+        userData: {}
+      };
+      if (opts.includeNavigation !== false && (scope === 'all' || scope === 'userData' || scope === 'modules')) {
+        bundle.core.navigation = await instance.exportNavigationState();
+      }
+
+      const moduleIds = opts.modules ?? [...backupProviders.keys()];
+      for (const id of moduleIds) {
+        const provider = backupProviders.get(id);
+        if (!provider) continue;
+        bundle.modules[id] = {
+          moduleVersion: provider.version,
+          data: await provider.export({ includeUserData: opts.includeUserData !== false, scope })
+        };
+      }
+
+      bundle.integrity = await createIntegrity(bundle);
+      return opts.encrypt?.enabled ? encryptBackup(bundle, opts.encrypt.password) : bundle;
+    },
+    async importBackup(input, opts = {}) {
+      const bundle = input?.format === ENCRYPTED_BACKUP_FORMAT
+        ? await decryptBackup(input, opts.decrypt?.password ?? '')
+        : input;
+
+      if (bundle?.format !== BACKUP_FORMAT) {
+        throw new Error('Unsupported backup format');
+      }
+      const integrityOk = await verifyIntegrity(bundle);
+      if (!integrityOk) {
+        throw new Error('Backup integrity check failed');
+      }
+
+      const report = { core: { applied: false, warnings: [] }, navigation: { applied: false, warnings: [] }, modules: {} };
+      if (bundle.core?.settings) {
+        await storage.set(NAV_KEYS.coreSettings, bundle.core.settings.coreSettings ?? {});
+        report.core.applied = true;
+      }
+      if (bundle.core?.navigation) {
+        report.navigation = await instance.importNavigationState(bundle.core.navigation);
+      }
+      for (const [id, payload] of Object.entries(bundle.modules ?? {})) {
+        const provider = backupProviders.get(id);
+        if (!provider?.import) {
+          report.modules[id] = { applied: false, warnings: ['provider not found'] };
+          continue;
+        }
+        report.modules[id] = await provider.import(payload.data, {
+          mode: opts.mode ?? 'merge',
+          includeUserData: opts.includeUserData !== false
+        });
+      }
+      return report;
+    },
+    async exportDelta({ baseId, baseHashB64, sinceRevision = 0 } = {}) {
+      const log = (await storage.get(NAV_KEYS.revisionLog)) ?? [];
+      const changes = log.filter((item) => item.rev > sinceRevision);
+      return {
+        format: DELTA_BACKUP_FORMAT,
+        formatVersion: 1,
+        base: { baseId, baseHashB64 },
+        createdAt: new Date().toISOString(),
+        revision: state.revision,
+        changes: { core: { set: { revision: state.revision }, del: [] }, navigation: changes, modules: {} }
+      };
+    },
+    async applyDelta(baseBundle, deltaBundle) {
+      if (baseBundle.backupId !== deltaBundle.base.baseId) throw new Error('Delta baseId mismatch');
+      return { ...baseBundle, deltaAppliedAt: new Date().toISOString(), delta: deltaBundle };
+    },
+    on(event, handler) {
+      const arr = listeners.get(event) ?? [];
+      arr.push(handler);
+      listeners.set(event, arr);
+      return () => instance.off(event, handler);
+    },
+    off(event, handler) {
+      const arr = listeners.get(event) ?? [];
+      listeners.set(event, arr.filter((h) => h !== handler));
+    }
+  };
+
+  if (Array.isArray(options.modules)) {
+    for (const module of options.modules) instance.use(module);
+  }
+
+  return instance;
+}
+
+export function createNavi(storage) {
+  assertStorage(storage);
+  return {
+    async exportNavigationState() {
+      return toNavPayload(await loadNavigationState(storage));
+    },
+    async importNavigationState(payload) {
+      return saveNavigationState(storage, fromNavPayload(payload));
+    }
+  };
+}
+
+export { encryptBackup, decryptBackup, signBackup, verifyBackup, verifyIntegrity } from './backup/crypto.js';
+export { createMemoryStorage } from './storage/storage_iface.js';
+export { VERSION as version };
